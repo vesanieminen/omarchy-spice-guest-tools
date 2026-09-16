@@ -69,7 +69,7 @@ do
           output = output,
           mode = "modeline " .. modeline,
           position = position,
-          scale = omarchy_monitor_scale,
+          scale = (state_version >= 4 and tonumber(monitor.scale)) or omarchy_monitor_scale,
         }
         hl.monitor(config)
       end

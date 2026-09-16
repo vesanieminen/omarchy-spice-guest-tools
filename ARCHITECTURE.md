@@ -47,7 +47,10 @@ payload directory under `/usr/share/spice-guest-tools/backends/`.
 `omarchy-hyprland` is the first backend. It owns every Omarchy/Hyprland-specific
 assumption: `monitors.lua`, `hl.monitor`, `hyprctl`, output scale translation,
 and the persistent Lua monitor block. Runtime rules retain the live per-output
-scale, while persistent rules follow Omarchy's `omarchy_monitor_scale` setting.
+scale by default. When the user opts into a display scale policy, the backend
+resolves scale before applying the complete layout and persists that resolved
+value with the mode and logical position. Legacy persistent state continues to
+follow Omarchy's `omarchy_monitor_scale` setting.
 Adding another compositor should require a new backend and its assets, without
 changes to SPICE parsing or clipboard code.
 

@@ -189,8 +189,8 @@ each new complete layout immediately and suppresses only exact duplicates.
 Runtime state is stored under `$XDG_STATE_HOME/spice-guest-tools`, and temporary
 files and locks live under `$XDG_RUNTIME_DIR/spice-guest-tools`.
 
-Display scale remains owned entirely by Omarchy's monitor configuration. Stock
-configurations may let Hyprland select it automatically:
+By default, display scale remains owned entirely by Omarchy's monitor
+configuration. Stock configurations may let Hyprland select it automatically:
 
 ```lua
 local omarchy_monitor_scale = "auto"
@@ -205,9 +205,32 @@ local omarchy_monitor_scale = 1.5
 Keep this setting in `~/.config/hypr/monitors.lua` as usual. The SPICE
 integration reads each output's live scale only to translate physical SPICE
 coordinates into Hyprland's logical coordinate space. Runtime monitor updates
-explicitly retain each output's current live scale. Persisted SPICE rules use
-`omarchy_monitor_scale`, so Hyprland does not fall back to scale 1 after a
+explicitly retain each output's current live scale. Persisted legacy SPICE state
+uses `omarchy_monitor_scale`, so Hyprland does not fall back to scale 1 after a
 restart and changes made through Omarchy's display settings continue to apply.
+
+For virtual displays whose reported physical size does not change with the host
+display, Hyprland's automatic scale can choose the wrong result. An opt-in
+height-based policy resolves the target scale before each atomic layout update:
+
+```toml
+[display]
+scale_policy = "height-threshold"
+scale_threshold_height = 1800
+scale_below_threshold = 1
+scale_at_or_above_threshold = 2
+```
+
+With this example, modes below 1800 pixels high use scale 1 and larger modes use
+scale 2. The default `preserve` policy retains the current live scale exactly as
+before. Before applying either policy, the backend verifies that the resulting
+logical width and height are integers. It falls back to scale 1 when a transient
+SPICE mode cannot be evenly divided by the selected scale, preventing Hyprland
+from receiving an invalid mode/scale pair. This fallback is a temporary safety
+workaround and should be removed once the bridge has an authoritative target
+scale that is guaranteed compatible with every incoming mode. Resolved scales
+are stored with the display state so login and restart restore the same mode,
+logical position, and scale together.
 
 ## Uninstall
 

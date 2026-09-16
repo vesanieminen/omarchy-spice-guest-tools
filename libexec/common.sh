@@ -55,6 +55,13 @@ validate_bool() {
   [[ ${value} == true || ${value} == false ]] || die "${name} must be true or false"
 }
 
+validate_scale() {
+  local name=$1 value=$2
+  [[ ${value} =~ ^[0-9]+([.][0-9]+)?$ ]] || die "${name} must be a number"
+  awk -v value="${value}" 'BEGIN { exit !(value >= 0.5 && value <= 4) }' ||
+    die "${name} must be between 0.5 and 4"
+}
+
 parse_clipboard_derived_formats() {
   local value compact
   value=$1
@@ -70,6 +77,10 @@ load_config() {
   INTEGRATION_BACKEND=auto
   DISPLAY_ENABLED=true
   DISPLAY_OUTPUT=auto
+  DISPLAY_SCALE_POLICY=preserve
+  DISPLAY_SCALE_THRESHOLD_HEIGHT=1800
+  DISPLAY_SCALE_BELOW_THRESHOLD=1
+  DISPLAY_SCALE_AT_OR_ABOVE_THRESHOLD=2
   CLIPBOARD_ENABLED=true
   CLIPBOARD_MAX_BYTES=104857600
   CLIPBOARD_MAX_PIXELS=67108864
@@ -97,6 +108,10 @@ load_config() {
         integration.backend) INTEGRATION_BACKEND=${value} ;;
         display.enabled) DISPLAY_ENABLED=${value} ;;
         display.output) DISPLAY_OUTPUT=${value} ;;
+        display.scale_policy) DISPLAY_SCALE_POLICY=${value} ;;
+        display.scale_threshold_height) DISPLAY_SCALE_THRESHOLD_HEIGHT=${value} ;;
+        display.scale_below_threshold) DISPLAY_SCALE_BELOW_THRESHOLD=${value} ;;
+        display.scale_at_or_above_threshold) DISPLAY_SCALE_AT_OR_ABOVE_THRESHOLD=${value} ;;
         clipboard.enabled) CLIPBOARD_ENABLED=${value} ;;
         clipboard.max_bytes) CLIPBOARD_MAX_BYTES=${value} ;;
         clipboard.max_pixels) CLIPBOARD_MAX_PIXELS=${value} ;;
@@ -112,6 +127,11 @@ load_config() {
   validate_bool clipboard.enabled "${CLIPBOARD_ENABLED}"
   [[ ${DISPLAY_OUTPUT} == auto || ${DISPLAY_OUTPUT} =~ ^[A-Za-z0-9._-]+$ ]] ||
     die "display.output contains unsupported characters"
+  [[ ${DISPLAY_SCALE_POLICY} == preserve || ${DISPLAY_SCALE_POLICY} == height-threshold ]] ||
+    die "display.scale_policy must be preserve or height-threshold"
+  validate_uint display.scale_threshold_height "${DISPLAY_SCALE_THRESHOLD_HEIGHT}" 480 8192
+  validate_scale display.scale_below_threshold "${DISPLAY_SCALE_BELOW_THRESHOLD}"
+  validate_scale display.scale_at_or_above_threshold "${DISPLAY_SCALE_AT_OR_ABOVE_THRESHOLD}"
   validate_uint clipboard.max_bytes "${CLIPBOARD_MAX_BYTES}" 1 1073741824
   validate_uint clipboard.max_pixels "${CLIPBOARD_MAX_PIXELS}" 1 268435456
   [[ ${INTEGRATION_BACKEND} == auto ||
@@ -221,19 +241,20 @@ active_local_wayland_session_for_user() {
 
 write_display_state() {
   local layout_file=$1 directory state_file temporary
-  local monitor_index output modeline logical_x logical_y
+  local monitor_index output modeline logical_x logical_y scale
   directory=$(state_dir)
   state_file="${directory}/display.state"
   mkdir -p -- "${directory}"
   chmod 700 "${directory}"
   temporary=$(mktemp "${directory}/display.state.XXXXXX")
   chmod 600 "${temporary}"
-  printf 'version=3\n' >"${temporary}"
-  while IFS=$'\t' read -r monitor_index output modeline logical_x logical_y; do
+  printf 'version=4\n' >"${temporary}"
+  while IFS=$'\t' read -r monitor_index output modeline logical_x logical_y scale; do
     printf 'monitor.%s.output=%s\n' "${monitor_index}" "${output}"
     printf 'monitor.%s.modeline=%s\n' "${monitor_index}" "${modeline}"
     printf 'monitor.%s.x=%s\n' "${monitor_index}" "${logical_x}"
     printf 'monitor.%s.y=%s\n' "${monitor_index}" "${logical_y}"
+    printf 'monitor.%s.scale=%s\n' "${monitor_index}" "${scale}"
   done <"${layout_file}" >>"${temporary}"
   mv -f -- "${temporary}" "${state_file}"
 }

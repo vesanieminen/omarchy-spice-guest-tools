@@ -214,6 +214,34 @@ backend_detect_refresh_rate() {
   printf '%s\n' 60
 }
 
+backend_resolve_monitor_scale() {
+  local modeline=$1 current_scale=$2 width height target_scale
+  read -r width height < <(awk '{ if (NF >= 6) print $2, $6 }' <<<"${modeline}")
+  [[ ${width} =~ ^[0-9]+$ && ${height} =~ ^[0-9]+$ ]] || return 1
+
+  if [[ ${DISPLAY_SCALE_POLICY:-preserve} == preserve ]]; then
+    target_scale=${current_scale}
+  elif ((height < DISPLAY_SCALE_THRESHOLD_HEIGHT)); then
+    target_scale=${DISPLAY_SCALE_BELOW_THRESHOLD}
+  else
+    target_scale=${DISPLAY_SCALE_AT_OR_ABOVE_THRESHOLD}
+  fi
+
+  # Temporary safety workaround: remove this fallback once the bridge obtains
+  # an authoritative target scale that is guaranteed compatible with each
+  # incoming mode. Until then, never pass fractional logical dimensions to
+  # Hyprland during transient SPICE resize sequences.
+  if ! awk -v width="${width}" -v height="${height}" -v scale="${target_scale}" '
+    function abs(value) { return value < 0 ? -value : value }
+    function is_integer(value) { return abs(value - int(value + 0.5)) < 0.000001 }
+    BEGIN { exit !(scale > 0 && is_integer(width / scale) && is_integer(height / scale)) }
+  '; then
+    log "scale ${target_scale} does not evenly divide ${width}x${height}; using scale 1"
+    target_scale=1
+  fi
+  printf '%s\n' "${target_scale}"
+}
+
 backend_apply_monitor_layout() {
   local layout_file=$1 monitors_json lua_command="do " resolved_file
   local monitor_index output modeline raw_x raw_y context monitor_scale current_x current_y
@@ -259,6 +287,11 @@ backend_apply_monitor_layout() {
       rm -f -- "${resolved_file}"
       return 1
     }
+    monitor_scale=$(backend_resolve_monitor_scale "${modeline}" "${monitor_scale}") || {
+      log "could not resolve the target scale for ${output}"
+      rm -f -- "${resolved_file}"
+      return 1
+    }
 
     if ((monitor_count == 0)); then
       logical_x=${current_x}
@@ -292,8 +325,9 @@ backend_apply_monitor_layout() {
       logical_y=${current_y}
     fi
 
-    printf '%s\t%s\t%s\t%s\t%s\n' \
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
       "${monitor_index}" "${output}" "${modeline}" "${logical_x}" "${logical_y}" \
+      "${monitor_scale}" \
       >>"${resolved_file}"
     printf -v lua_command \
       '%shl.monitor({ output = "%s", mode = "modeline %s", position = "%sx%s", scale = %s }); ' \

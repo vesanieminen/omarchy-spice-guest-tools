@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Add an opt-in height-threshold display scale policy and apply the resolved
+  mode, position, and scale atomically, avoiding invalid intermediate scale
+  combinations during host-display transitions.
+- Fall back to scale 1 when a selected scale would produce fractional logical
+  dimensions for a transient SPICE mode.
+- Persist each resolved scale with the display state so session restoration
+  reproduces the complete working layout.
+
 ## 0.1.4 — 2026-08-28
 
 - Publish SPICE/X11 clipboard items to Wayland without replacing the X11

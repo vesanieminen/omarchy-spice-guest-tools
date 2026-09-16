@@ -111,6 +111,10 @@ config_parses() {
   load_config
   [[ ${INTEGRATION_BACKEND} == auto ]]
   [[ ${DISPLAY_OUTPUT} == auto ]]
+  [[ ${DISPLAY_SCALE_POLICY} == preserve ]]
+  [[ ${DISPLAY_SCALE_THRESHOLD_HEIGHT} == 1800 ]]
+  [[ ${DISPLAY_SCALE_BELOW_THRESHOLD} == 1 ]]
+  [[ ${DISPLAY_SCALE_AT_OR_ABOVE_THRESHOLD} == 2 ]]
   [[ ${CLIPBOARD_MAX_BYTES} == 104857600 ]]
   [[ ${CLIPBOARD_MAX_PIXELS} == 67108864 ]]
   [[ ${CLIPBOARD_DERIVED_FORMATS} == image/png ]]
@@ -334,6 +338,32 @@ config_rejects_display_ownership_settings() {
   rm -rf -- "${test_home}"
 }
 
+config_validates_display_scale_policy() {
+  local test_home
+  test_home=$(mktemp -d /tmp/spice-guest-tools-scale-config.XXXXXX)
+  printf '%s\n' \
+    '[display]' \
+    'scale_policy = "height-threshold"' \
+    'scale_threshold_height = 1800' \
+    'scale_below_threshold = 1' \
+    'scale_at_or_above_threshold = 2' \
+    >"${test_home}/config.toml"
+  SPICE_GUEST_TOOLS_CONFIG="${test_home}/config.toml" \
+    bash -c 'source "$1"; load_config; [[ $DISPLAY_SCALE_POLICY == height-threshold ]]' \
+      _ "${project_root}/libexec/common.sh" || {
+        rm -rf -- "${test_home}"
+        return 1
+      }
+  printf '%s\n' '[display]' 'scale_policy = "invalid"' >"${test_home}/config.toml"
+  if SPICE_GUEST_TOOLS_CONFIG="${test_home}/config.toml" \
+    bash -c 'source "$1"; load_config' _ "${project_root}/libexec/common.sh" \
+      >/dev/null 2>&1; then
+    rm -rf -- "${test_home}"
+    return 1
+  fi
+  rm -rf -- "${test_home}"
+}
+
 config_accepts_disabled_derived_formats() {
   local test_home
   test_home=$(mktemp -d /tmp/spice-guest-tools-derived-config.XXXXXX)
@@ -422,6 +452,113 @@ runtime_monitor_update_applies_complete_layout() {
     return 1
   fi
   rm -rf -- "${test_home}"
+}
+
+runtime_monitor_update_resolves_scale_before_apply() {
+  local test_home test_bin call_log layout_file
+  local low_modeline high_modeline
+  test_home=$(mktemp -d /tmp/spice-guest-tools-runtime-scale.XXXXXX)
+  test_bin="${test_home}/bin"
+  call_log="${test_home}/hyprctl.call"
+  mkdir -p "${test_bin}"
+  # shellcheck disable=SC2016
+  printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'if [[ $1 == -j ]]; then' \
+    '  printf '\''[{"name":"Virtual-1","scale":2,"x":0,"y":0}]\n'\''' \
+    '  exit 0' \
+    'fi' \
+    'printf '\''%s\n'\'' "$*" >"${HYPR_CALL_LOG}"' \
+    'printf '\''%s\n'\'' ok' \
+    >"${test_bin}/hyprctl"
+  chmod 755 "${test_bin}/hyprctl"
+
+  low_modeline='161.00 1728 1840 2024 2320 1117 1120 1130 1159 -hsync +vsync'
+  high_modeline='397.25 3456 3736 4112 4768 2160 2163 2168 2208 -hsync +vsync'
+  layout_file="${test_home}/layout"
+
+  # Preserving scale 2 for an odd-height SPICE mode would make Hyprland reject
+  # the layout. The backend must fall back before constructing the transaction.
+  printf '0\tVirtual-1\t%s\t0\t0\n' "${low_modeline}" >"${layout_file}"
+  (
+    # shellcheck disable=SC1091
+    source "${project_root}/libexec/common.sh"
+    source "${project_root}/libexec/backends/omarchy-hyprland.sh"
+    HYPR_CALL_LOG="${call_log}" PATH="${test_bin}:${PATH}" \
+      backend_apply_monitor_layout "${layout_file}" >/dev/null
+  )
+  grep -Fq 'scale = 1' "${call_log}" || {
+    rm -rf -- "${test_home}"
+    return 1
+  }
+
+  printf '0\tVirtual-1\t%s\t0\t0\n' "${low_modeline}" >"${layout_file}"
+  (
+    # shellcheck disable=SC1091
+    source "${project_root}/libexec/common.sh"
+    source "${project_root}/libexec/backends/omarchy-hyprland.sh"
+    DISPLAY_SCALE_POLICY=height-threshold
+    DISPLAY_SCALE_THRESHOLD_HEIGHT=1800
+    DISPLAY_SCALE_BELOW_THRESHOLD=1
+    DISPLAY_SCALE_AT_OR_ABOVE_THRESHOLD=2
+    HYPR_CALL_LOG="${call_log}" PATH="${test_bin}:${PATH}" \
+      backend_apply_monitor_layout "${layout_file}" >/dev/null
+  )
+  grep -Fq 'scale = 1' "${call_log}" || {
+    rm -rf -- "${test_home}"
+    return 1
+  }
+  [[ $(awk -F '\t' '{ print $6 }' "${layout_file}") == 1 ]] || {
+    rm -rf -- "${test_home}"
+    return 1
+  }
+
+  printf '0\tVirtual-1\t%s\t0\t0\n' "${high_modeline}" >"${layout_file}"
+  (
+    # shellcheck disable=SC1091
+    source "${project_root}/libexec/common.sh"
+    source "${project_root}/libexec/backends/omarchy-hyprland.sh"
+    DISPLAY_SCALE_POLICY=height-threshold
+    DISPLAY_SCALE_THRESHOLD_HEIGHT=1800
+    DISPLAY_SCALE_BELOW_THRESHOLD=1
+    DISPLAY_SCALE_AT_OR_ABOVE_THRESHOLD=2
+    HYPR_CALL_LOG="${call_log}" PATH="${test_bin}:${PATH}" \
+      backend_apply_monitor_layout "${layout_file}" >/dev/null
+  )
+  grep -Fq 'scale = 2' "${call_log}" &&
+    [[ $(awk -F '\t' '{ print $6 }' "${layout_file}") == 2 ]]
+  local result=$?
+  rm -rf -- "${test_home}"
+  return "${result}"
+}
+
+display_state_restores_resolved_scale() {
+  local test_home layout_file actual
+  test_home=$(mktemp -d /tmp/spice-guest-tools-state-scale.XXXXXX)
+  mkdir -p "${test_home}/state"
+  layout_file="${test_home}/layout"
+  printf '%s\n' \
+    $'0\tVirtual-1\t397.25 3456 3736 4112 4768 2160 2163 2168 2208 -hsync +vsync\t0\t0\t2' \
+    >"${layout_file}"
+  (
+    # shellcheck disable=SC1091
+    source "${project_root}/libexec/common.sh"
+    HOME="${test_home}" XDG_STATE_HOME="${test_home}/state" \
+      write_display_state "${layout_file}"
+  )
+  actual=$(HOME="${test_home}" XDG_STATE_HOME="${test_home}/state" \
+    SPICE_MANAGED_MONITOR="${project_root}/backends/omarchy-hyprland/managed-monitor.lua" \
+    lua -e '
+      omarchy_monitor_scale = 1
+      hl = { monitor = function(config) io.write(tostring(config.scale)) end }
+      dofile(os.getenv("SPICE_MANAGED_MONITOR"))
+    ')
+  grep -Fq 'version=4' "${test_home}/state/spice-guest-tools/display.state" &&
+    grep -Fq 'monitor.0.scale=2' "${test_home}/state/spice-guest-tools/display.state" &&
+    [[ ${actual} == 2 ]]
+  local result=$?
+  rm -rf -- "${test_home}"
+  return "${result}"
 }
 
 resize_path_avoids_reload_and_agent_restart() {
@@ -779,10 +916,13 @@ check "clipboard duplicate suppression includes MIME type" clipboard_duplicate_k
 check "clipboard provider requests a lazy PNG fallback" clipboard_provider_requests_lazy_png_fallback
 check "clipboard bridge ignores its private provider marker" clipboard_bridge_ignores_its_private_marker
 check "configuration rejects scale and refresh ownership" config_rejects_display_ownership_settings
+check "configuration validates the display scale policy" config_validates_display_scale_policy
 check "configuration can disable derived clipboard formats" config_accepts_disabled_derived_formats
 check "refresh rate is derived from system state" refresh_rate_comes_from_system_state
 check "modelines support non-60Hz virtual outputs" modeline_generation_supports_non_60hz_outputs
 check "runtime monitor update applies the complete layout" runtime_monitor_update_applies_complete_layout
+check "runtime monitor update resolves scale before apply" runtime_monitor_update_resolves_scale_before_apply
+check "display state restores the resolved scale" display_state_restores_resolved_scale
 check "resize path avoids reload and agent restart" resize_path_avoids_reload_and_agent_restart
 check "resize events are applied immediately without debounce" resize_path_applies_events_immediately
 check "managed monitors follow Omarchy scale and restore layout" managed_monitors_follow_omarchy_scale_and_restore_layout

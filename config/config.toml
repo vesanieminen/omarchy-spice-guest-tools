@@ -4,6 +4,10 @@ backend = "auto"
 [display]
 enabled = true
 output = "auto"
+scale_policy = "preserve"
+scale_threshold_height = 1800
+scale_below_threshold = 1
+scale_at_or_above_threshold = 2
 
 [clipboard]
 enabled = true
